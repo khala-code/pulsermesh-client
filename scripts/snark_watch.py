@@ -10,15 +10,18 @@ Usage:
 
 If --steward-id and --steward-key are omitted, the script registers a
 fresh steward with test pulses so you can run it against a clean DB.
+
+Auth note: identity polls in the watch loop use the admin key, not the
+steward pm_ key. The steward key rotates on every checkpoint advance,
+so the registration key would 401 after the first advance. The watch
+script is a node operator tool; admin key is correct here.
 """
 import sys
 import os
 import argparse
-import math
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Load .env if present — silently skipped if python-dotenv is not installed
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -26,15 +29,6 @@ except ImportError:
     pass
 
 from pulsermesh.client import PulserMeshClient, PulserMeshError
-
-try:
-    from rich.console import Console
-    from rich.table import Table
-    console = Console()
-    HAS_RICH = True
-except ImportError:
-    console = None
-    HAS_RICH = False
 
 
 def fmt(v, digits=4):
@@ -92,26 +86,27 @@ def ensure_steward(client: PulserMeshClient, n_pulses: int = 8):
         except PulserMeshError:
             pass
     print(f"Seeded {validated}/{n_pulses} validated pulses")
-    return steward_id, steward_key
+    return steward_id
 
 
 def run(args):
     client = PulserMeshClient()
 
-    if args.steward_id and args.steward_key:
+    if args.steward_id:
         steward_id = args.steward_id
-        steward_key = args.steward_key
         print(f"Watching existing steward {steward_id[:8]}...")
     else:
         print("No steward supplied — registering a fresh one...")
-        steward_id, steward_key = ensure_steward(client, n_pulses=args.seed_pulses)
+        steward_id = ensure_steward(client, n_pulses=args.seed_pulses)
 
     print()
     print_header()
 
     for i in range(args.checkpoints):
         cp = client.advance_checkpoint(ta_ref=float(i + 1))
-        identity = client.get_identity(steward_id, steward_key)
+        # Identity poll uses the admin key — the steward pm_ key rotates
+        # on every checkpoint advance and would 401 after the first.
+        identity = client._get(f"/stewards/{steward_id}/identity", client._admin_headers())
         print_row(cp.get("index"), identity)
 
     print()
@@ -121,7 +116,6 @@ def run(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Watch snark field evolution across checkpoints.")
     parser.add_argument("--steward-id",  default=None, help="Existing steward UUID")
-    parser.add_argument("--steward-key", default=None, help="Steward pm_ API key")
     parser.add_argument("--checkpoints", type=int, default=10, help="Number of checkpoints to advance (default: 10)")
     parser.add_argument("--seed-pulses", type=int, default=8,  help="Pulses to seed if creating a fresh steward (default: 8)")
     args = parser.parse_args()
