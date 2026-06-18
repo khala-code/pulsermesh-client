@@ -15,13 +15,16 @@ Usage:
 If --steward-id is omitted a fresh steward is registered and seeded with
 --seed-pulses validated pulses before the first advance.
 
-Auth note: identity polls use the admin key. The steward pm_ key rotates
-on every checkpoint advance; the watch script is a node operator tool.
+Auth note: identity polls use the admin key. Pulse submits use the
+steward pm_ key, which is re-derived after each checkpoint advance
+using the same HMAC the server uses in checkpoint.py:derive_steward_key.
 """
 import sys
 import os
 import argparse
 import itertools
+import hashlib
+import hmac
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -34,6 +37,20 @@ except ImportError:
 from pulsermesh.client import PulserMeshClient, PulserMeshError
 
 DOMAINS = ["water", "energy"]
+
+
+def derive_steward_key(steward_id: str, oa: float, za: float, ta: float, cp_hash: str, secret: str) -> str:
+    """
+    Re-derive the steward pm_ key for the given checkpoint hash.
+
+    Mirrors app/services/checkpoint.py:derive_steward_key exactly:
+      raw = f"{steward_id}|{oa}|{za}|{ta}|{cp_hash}"
+      h   = HMAC-SHA256(raw, secret)
+      key = f"pm_{h}"
+    """
+    raw = f"{steward_id}|{oa}|{za}|{ta}|{cp_hash}"
+    h = hmac.new(secret.encode(), raw.encode(), hashlib.sha256).hexdigest()
+    return f"pm_{h}"
 
 
 def fmt(v, digits=4):
@@ -97,44 +114,47 @@ def ensure_steward(client: PulserMeshClient, n_pulses: int):
     )
     steward_id = resp["id"]
     steward_key = resp["api_key"]
+    # Capture position for key re-derivation
+    pos = resp.get("position") or {"oa": 1.0, "za": 0.0, "ta": 0.0}
     print(f"Registered steward {steward_id[:8]}... with mission domains: water, energy")
 
     if n_pulses > 0:
         validated = submit_and_validate(client, steward_id, steward_key, n_pulses, cp_index=0)
         print(f"Seeded {validated}/{n_pulses} validated pulses")
 
-    return steward_id, steward_key
+    return steward_id, steward_key, pos
 
 
 def compute_uncertainty_radius(identity: dict) -> float | None:
-    """Client-side uncertainty radius estimate from pulse_count and ta."""
     import math
     n = identity.get("pulse_count") or 0
     ta = identity.get("ta") or 0.0
     if n < 1:
         return None
-    # Mirrors asymptotic.uncertainty_band(n, ta) / sqrt(n)
-    # lambda decay constant matches server default (0.1)
     base = (1.0 / math.sqrt(n)) * math.exp(-0.1 * ta)
     return base / math.sqrt(n)
 
 
 def run(args):
     client = PulserMeshClient()
+    admin_key = client.admin_key
 
     if args.steward_id:
         steward_id = args.steward_id
-        steward_key = None  # admin key used for identity polls; steward key not needed
+        steward_key = None
+        pos = {"oa": 1.0, "za": 0.0, "ta": 0.0}
         print(f"Watching existing steward {steward_id[:8]}...")
     else:
         print("No steward supplied — registering a fresh one...")
-        steward_id, steward_key = ensure_steward(client, n_pulses=args.seed_pulses)
+        steward_id, steward_key, pos = ensure_steward(client, n_pulses=args.seed_pulses)
+
+    oa, za, ta = pos.get("oa", 1.0), pos.get("za", 0.0), pos.get("ta", 0.0)
 
     print()
     print_header()
 
     for i in range(args.checkpoints):
-        # Submit pulses before this advance if requested
+        # Submit pulses before this advance using the current key
         if args.pulses_per_checkpoint > 0 and steward_key:
             submit_and_validate(
                 client, steward_id, steward_key,
@@ -143,6 +163,11 @@ def run(args):
             )
 
         cp = client.advance_checkpoint(ta_ref=float(i + 1))
+
+        # Re-derive the steward key for the new checkpoint hash
+        if steward_key is not None:
+            steward_key = derive_steward_key(steward_id, oa, za, ta, cp["hash"], admin_key)
+
         identity = client._get(f"/stewards/{steward_id}/identity", client._admin_headers())
         uncertainty_r = compute_uncertainty_radius(identity)
         print_row(cp.get("index"), identity, uncertainty_r)
