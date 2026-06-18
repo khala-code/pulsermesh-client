@@ -114,7 +114,7 @@ class PulserMeshClient:
         ta: float = 0.0,
     ) -> dict:
         """
-        POST /stewards — register a new steward.
+        POST /stewards/register — register a new steward.
 
         Sets self.steward_key to the returned api_key automatically.
         Returns the full registration response dict.
@@ -128,7 +128,7 @@ class PulserMeshClient:
         if domain_weights:
             body["domain_weights"] = domain_weights
 
-        resp = self._post("/stewards", self._admin_headers(), body)
+        resp = self._post("/stewards/register", self._admin_headers(), body)
         # Store the steward key so subsequent steward-auth calls work immediately
         api_key = resp.get("api_key")
         if api_key:
