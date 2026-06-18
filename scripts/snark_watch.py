@@ -17,14 +17,14 @@ If --steward-id is omitted a fresh steward is registered and seeded with
 
 Auth note: identity polls use the admin key. Pulse submits use the
 steward pm_ key, which is re-derived after each checkpoint advance
-using the same HMAC the server uses in checkpoint.py:derive_steward_key.
+using the same keyed_digest the server uses in crypto.py:
+  SHA256(f"{data}|{key}")  — key appended, NOT HMAC.
 """
 import sys
 import os
 import argparse
 import itertools
 import hashlib
-import hmac
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -39,17 +39,26 @@ from pulsermesh.client import PulserMeshClient, PulserMeshError
 DOMAINS = ["water", "energy"]
 
 
-def derive_steward_key(steward_id: str, oa: float, za: float, ta: float, cp_hash: str, secret: str) -> str:
-    """
-    Re-derive the steward pm_ key for the given checkpoint hash.
+def keyed_digest(data: str, key: str) -> str:
+    """Mirror app/services/crypto.py:keyed_digest exactly.
 
-    Mirrors app/services/checkpoint.py:derive_steward_key exactly:
-      raw = f"{steward_id}|{oa}|{za}|{ta}|{cp_hash}"
-      h   = HMAC-SHA256(raw, secret)
-      key = f"pm_{h}"
+    SHA256(f"{data}|{key}") — the key is appended with a pipe delimiter,
+    NOT used as an HMAC secret. Must match the server implementation.
     """
-    raw = f"{steward_id}|{oa}|{za}|{ta}|{cp_hash}"
-    h = hmac.new(secret.encode(), raw.encode(), hashlib.sha256).hexdigest()
+    raw = f"{data}|{key}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def derive_steward_key(steward_id: str, oa: float, za: float, ta: float, cp_hash: str, admin_key: str) -> str:
+    """Re-derive the steward pm_ key for a given checkpoint hash.
+
+    Mirrors app/services/checkpoint.py:derive_steward_key:
+      data = f"{steward_id}|{oa}|{za}|{ta}|{cp_hash}"
+      h    = keyed_digest(data, admin_key)
+      key  = f"pm_{h}"
+    """
+    data = f"{steward_id}|{oa}|{za}|{ta}|{cp_hash}"
+    h = keyed_digest(data, admin_key)
     return f"pm_{h}"
 
 
@@ -114,7 +123,6 @@ def ensure_steward(client: PulserMeshClient, n_pulses: int):
     )
     steward_id = resp["id"]
     steward_key = resp["api_key"]
-    # Capture position for key re-derivation
     pos = resp.get("position") or {"oa": 1.0, "za": 0.0, "ta": 0.0}
     print(f"Registered steward {steward_id[:8]}... with mission domains: water, energy")
 
@@ -164,7 +172,7 @@ def run(args):
 
         cp = client.advance_checkpoint(ta_ref=float(i + 1))
 
-        # Re-derive the steward key for the new checkpoint hash
+        # Re-derive key for the new checkpoint hash using server's keyed_digest
         if steward_key is not None:
             steward_key = derive_steward_key(steward_id, oa, za, ta, cp["hash"], admin_key)
 
