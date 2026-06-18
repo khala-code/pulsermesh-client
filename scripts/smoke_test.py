@@ -11,8 +11,7 @@ Full lifecycle integration test:
   7. Advance a second checkpoint to test stability
 
 Usage:
-  export PULSERMESH_BASE_URL=http://localhost:8000
-  export PULSERMESH_ADMIN_KEY=your-admin-key
+  Create a .env file in the repo root (see README), then:
   python scripts/smoke_test.py
 """
 import sys
@@ -20,6 +19,13 @@ import os
 
 # Allow running from repo root without installing the package
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Load .env if present — silently skipped if python-dotenv is not installed
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 from pulsermesh.client import PulserMeshClient, PulserMeshError
 
@@ -150,7 +156,7 @@ def run():
 
     console.print(f"  Validated: {validated}  Rejected (proximity): {rejected}")
 
-    # ── advance checkpoint ────────────────────────────────────────────────────
+    # ── advance checkpoint ───────────────────────────────────────────────────
     step(6, TOTAL, "Advancing checkpoint")
     cp = client.advance_checkpoint(ta_ref=1.0)
     console.print(f"  Checkpoint index: {cp.get('index')} hash: {cp.get('hash', '')[:16]}...")

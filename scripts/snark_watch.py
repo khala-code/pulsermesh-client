@@ -18,6 +18,13 @@ import math
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Load .env if present — silently skipped if python-dotenv is not installed
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from pulsermesh.client import PulserMeshClient, PulserMeshError
 
 try:
